@@ -17,6 +17,8 @@
 #include "qemu/thread.h"
 #include "qemu/coroutine.h"
 #include "coth.h"
+/* mifritscher: after killing the debug printf, kill this as well! */
+#include "qemu/error-report.h"
 
 int v9fs_co_st_gen(V9fsPDU *pdu, V9fsPath *path, mode_t st_mode,
                    V9fsStatDotl *v9stat)
@@ -39,6 +41,7 @@ int v9fs_co_st_gen(V9fsPDU *pdu, V9fsPath *path, mode_t st_mode,
             });
         v9fs_path_unlock(s);
     }
+    error_printf("v9fs_co_st_gen: %d\n", err);
     return err;
 }
 
@@ -59,6 +62,7 @@ int v9fs_co_lstat(V9fsPDU *pdu, V9fsPath *path, struct stat *stbuf)
             }
         });
     v9fs_path_unlock(s);
+    error_printf("v9fs_co_lstat: %d\n", err);
     return err;
 }
 
@@ -91,6 +95,7 @@ int v9fs_co_fstat(V9fsPDU *pdu, V9fsFidState *fidp, struct stat *stbuf)
             err = 0;
         }
     }
+    error_printf("v9fs_co_fstat: %s %d\n", (&fidp->path)->data, err);
     return err;
 }
 
@@ -119,6 +124,7 @@ int v9fs_co_open(V9fsPDU *pdu, V9fsFidState *fidp, int flags)
             v9fs_reclaim_fd(pdu);
         }
     }
+    error_printf("v9fs_co_open: %s %d\n", (&fidp->path)->data, err);
     return err;
 }
 
@@ -147,13 +153,16 @@ int v9fs_co_open2(V9fsPDU *pdu, V9fsFidState *fidp, V9fsString *name, gid_t gid,
         {
             err = s->ops->open2(&s->ctx, &fidp->path,
                                 name->data, flags, &cred, &fidp->fs);
+            error_printf("v9fs_co_open2: open returned %d\n", err);
             if (err < 0) {
                 err = -errno;
             } else {
                 v9fs_path_init(&path);
                 err = v9fs_name_to_path(s, &fidp->path, name->data, &path);
+                error_printf("v9fs_co_open2: v9fs_name_to_path returned %d\n", err);
                 if (!err) {
                     err = s->ops->lstat(&s->ctx, &path, stbuf);
+                    error_printf("v9fs_co_open2: lstat returned %d\n", err);
                     if (err < 0) {
                         err = -errno;
                         s->ops->close(&s->ctx, &fidp->fs);
@@ -173,6 +182,7 @@ int v9fs_co_open2(V9fsPDU *pdu, V9fsFidState *fidp, V9fsString *name, gid_t gid,
             v9fs_reclaim_fd(pdu);
         }
     }
+    error_printf("v9fs_co_open2: %s %d\n", (&fidp->path)->data, err);
     return err;
 }
 
@@ -194,6 +204,7 @@ int v9fs_co_close(V9fsPDU *pdu, V9fsFidOpenState *fs)
     if (!err) {
         total_open_fd--;
     }
+    error_printf("v9fs_co_close: %d\n", err);
     return err;
 }
 
@@ -234,6 +245,7 @@ int v9fs_co_link(V9fsPDU *pdu, V9fsFidState *oldfid,
             }
         });
     v9fs_path_unlock(s);
+    error_printf("v9fs_co_link: %d\n", err);
     return err;
 }
 
@@ -253,6 +265,7 @@ int v9fs_co_pwritev(V9fsPDU *pdu, V9fsFidState *fidp,
                 err = -errno;
             }
         });
+    error_printf("v9fs_co_pwritev: %s %d\n", (&fidp->path)->data, err);
     return err;
 }
 
@@ -272,5 +285,6 @@ int v9fs_co_preadv(V9fsPDU *pdu, V9fsFidState *fidp,
                 err = -errno;
             }
         });
+    error_printf("v9fs_co_preadv: %s %d\n", (&fidp->path)->data, err);
     return err;
 }

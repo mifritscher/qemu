@@ -20,7 +20,21 @@
 #include "qemu/sockets.h"
 #include "virtio-9p.h"
 #include "fsdev/qemu-fsdev.h"
-#include "9p-xattr.h"
+#ifdef WIN32
+    /* taken from linux/kdev_t.h */
+    #define MINORBITS       20
+    #define MINORMASK       ((1U << MINORBITS) - 1)
+
+    #define major(dev)      ((unsigned int) ((dev) >> MINORBITS))
+    #define minor(dev)      ((unsigned int) ((dev) & MINORMASK))
+    #define makedev(ma, mi)    (((ma) << MINORBITS) | (mi))
+
+    /* taken from linux/include/linux/stat.h */
+    #define UTIME_NOW ((1l << 30) - 1l)
+    #define UTIME_OMIT ((1l << 30) - 2l)
+#else
+    #include "9p-xattr.h"
+#endif
 #include "coth.h"
 #include "trace.h"
 #include "migration/migration.h"
@@ -576,9 +590,11 @@ static void stat_to_qid(const struct stat *stbuf, V9fsQID *qidp)
     if (S_ISDIR(stbuf->st_mode)) {
         qidp->type |= P9_QID_TYPE_DIR;
     }
-    if (S_ISLNK(stbuf->st_mode)) {
-        qidp->type |= P9_QID_TYPE_SYMLINK;
-    }
+    #ifndef WIN32
+        if (S_ISLNK(stbuf->st_mode)) {
+            qidp->type |= P9_QID_TYPE_SYMLINK;
+        }
+    #endif
 }
 
 static int fid_to_qid(V9fsPDU *pdu, V9fsFidState *fidp, V9fsQID *qidp)
@@ -677,12 +693,15 @@ static mode_t v9mode_to_mode(uint32_t mode, V9fsString *extension)
         ret |= S_IFDIR;
     }
 
+#ifndef WIN32
     if (mode & P9_STAT_MODE_SYMLINK) {
         ret |= S_IFLNK;
     }
     if (mode & P9_STAT_MODE_SOCKET) {
         ret |= S_IFSOCK;
     }
+#endif
+
     if (mode & P9_STAT_MODE_NAMED_PIPE) {
         ret |= S_IFIFO;
     }
@@ -698,6 +717,7 @@ static mode_t v9mode_to_mode(uint32_t mode, V9fsString *extension)
         ret |= S_IFREG;
     }
 
+#ifndef WIN32
     if (mode & P9_STAT_MODE_SETUID) {
         ret |= S_ISUID;
     }
@@ -707,6 +727,7 @@ static mode_t v9mode_to_mode(uint32_t mode, V9fsString *extension)
     if (mode & P9_STAT_MODE_SETVTX) {
         ret |= S_ISVTX;
     }
+#endif
 
     return ret;
 }
@@ -762,6 +783,7 @@ static uint32_t stat_to_v9mode(const struct stat *stbuf)
         mode |= P9_STAT_MODE_DIR;
     }
 
+#ifndef WIN32
     if (S_ISLNK(stbuf->st_mode)) {
         mode |= P9_STAT_MODE_SYMLINK;
     }
@@ -769,6 +791,7 @@ static uint32_t stat_to_v9mode(const struct stat *stbuf)
     if (S_ISSOCK(stbuf->st_mode)) {
         mode |= P9_STAT_MODE_SOCKET;
     }
+#endif
 
     if (S_ISFIFO(stbuf->st_mode)) {
         mode |= P9_STAT_MODE_NAMED_PIPE;
@@ -778,6 +801,7 @@ static uint32_t stat_to_v9mode(const struct stat *stbuf)
         mode |= P9_STAT_MODE_DEVICE;
     }
 
+#ifndef WIN32
     if (stbuf->st_mode & S_ISUID) {
         mode |= P9_STAT_MODE_SETUID;
     }
@@ -789,6 +813,7 @@ static uint32_t stat_to_v9mode(const struct stat *stbuf)
     if (stbuf->st_mode & S_ISVTX) {
         mode |= P9_STAT_MODE_SETVTX;
     }
+#endif
 
     return mode;
 }
@@ -881,14 +906,31 @@ static void stat_to_v9stat_dotl(V9fsState *s, const struct stat *stbuf,
     v9lstat->st_gid = stbuf->st_gid;
     v9lstat->st_rdev = stbuf->st_rdev;
     v9lstat->st_size = stbuf->st_size;
+#ifdef WIN32
+    v9lstat->st_blksize = 4096;
+    v9lstat->st_blocks = ((stbuf->st_size + 1) / v9lstat->st_blksize) + 1;
+#else
     v9lstat->st_blksize = stbuf->st_blksize;
     v9lstat->st_blocks = stbuf->st_blocks;
+#endif
     v9lstat->st_atime_sec = stbuf->st_atime;
+#ifdef WIN32
+    v9lstat->st_atime_nsec = 0;
+#else
     v9lstat->st_atime_nsec = stbuf->st_atim.tv_nsec;
+#endif
     v9lstat->st_mtime_sec = stbuf->st_mtime;
+#ifdef WIN32
+    v9lstat->st_mtime_nsec = 0;
+#else
     v9lstat->st_mtime_nsec = stbuf->st_mtim.tv_nsec;
+#endif
     v9lstat->st_ctime_sec = stbuf->st_ctime;
+#ifdef WIN32
+    v9lstat->st_ctime_nsec = 0;
+#else
     v9lstat->st_ctime_nsec = stbuf->st_ctim.tv_nsec;
+#endif
     /* Currently we only support BASIC fields in stat */
     v9lstat->st_result_mask = P9_STATS_BASIC;
 
@@ -1639,7 +1681,10 @@ static int v9fs_do_readdir_with_stat(V9fsPDU *pdu,
         v9fs_path_init(&path);
         err = v9fs_co_readdir_r(pdu, fidp, dent, &result);
         if (err || !result) {
+            error_printf("v9fs_do_readdir_with_stat: exiting...\n");
             break;
+        } else {
+            error_printf("v9fs_do_readdir_with_stat: continue\n");
         }
         err = v9fs_co_name_to_path(pdu, &fidp->path, dent->d_name, &path);
         if (err < 0) {
@@ -1666,7 +1711,12 @@ static int v9fs_do_readdir_with_stat(V9fsPDU *pdu,
         count += len;
         v9fs_stat_free(&v9stat);
         v9fs_path_free(&path);
+#ifdef WIN32
+        #warning "Probably right, but could make problems!"
+        saved_dir_pos = v9fs_co_telldir(pdu, fidp);
+#else
         saved_dir_pos = dent->d_off;
+#endif
     }
 out:
     g_free(dent);
@@ -1806,6 +1856,9 @@ static int v9fs_do_readdir(V9fsPDU *pdu,
     int32_t count = 0;
     off_t saved_dir_pos;
     struct dirent *dent, *result;
+#ifdef WIN32
+    uint8_t type = 0; /* DT_UNKNOWN */
+#endif
 
     /* save the directory position */
     saved_dir_pos = v9fs_co_telldir(pdu, fidp);
@@ -1818,15 +1871,25 @@ static int v9fs_do_readdir(V9fsPDU *pdu,
     while (1) {
         err = v9fs_co_readdir_r(pdu, fidp, dent, &result);
         if (err || !result) {
+            error_printf("v9fs_do_readdir: exiting...\n");
             break;
+        } else {
+            error_printf("v9fs_do_readdir: continue\n");
         }
         v9fs_string_init(&name);
+        if (!dent->d_name) {
+            error_printf("\ndent->d_name is NULL!\n");
+            break;
+        } else {
+            error_printf("v9fs_do_readdir: entry is named %s, strlen %u\n", dent->d_name, strlen(dent->d_name));
+        }
         v9fs_string_sprintf(&name, "%s", dent->d_name);
         if ((count + v9fs_readdir_data_size(&name)) > max_count) {
             /* Ran out of buffer. Set dir back to old position and return */
             v9fs_co_seekdir(pdu, fidp, saved_dir_pos);
             v9fs_string_free(&name);
             g_free(dent);
+            error_printf("v9fs_do_readdir: RAN OUT OF BUFFER return %d\n\n", count);
             return count;
         }
         /*
@@ -1841,9 +1904,16 @@ static int v9fs_do_readdir(V9fsPDU *pdu,
         qid.version = 0;
 
         /* 11 = 7 + 4 (7 = start offset, 4 = space for storing count) */
+#ifdef WIN32
+        #warning "Probably right, but could make problems!"
+        len = pdu_marshal(pdu, 11 + count, "Qqbs",
+                          &qid, v9fs_co_telldir(pdu, fidp),
+                          type, &name);
+#else
         len = pdu_marshal(pdu, 11 + count, "Qqbs",
                           &qid, dent->d_off,
                           dent->d_type, &name);
+#endif
         if (len < 0) {
             v9fs_co_seekdir(pdu, fidp, saved_dir_pos);
             v9fs_string_free(&name);
@@ -1852,12 +1922,18 @@ static int v9fs_do_readdir(V9fsPDU *pdu,
         }
         count += len;
         v9fs_string_free(&name);
+#ifdef WIN32
+        #warning "Probably right, but could make problems!"
+        saved_dir_pos = v9fs_co_telldir(pdu, fidp);
+#else
         saved_dir_pos = dent->d_off;
+#endif
     }
     g_free(dent);
     if (err < 0) {
         return err;
     }
+    error_printf("v9fs_do_readdir: return %d\n\n", count);
     return count;
 }
 
@@ -1878,6 +1954,7 @@ static void v9fs_readdir(void *opaque)
         goto out_nofid;
     }
     trace_v9fs_readdir(pdu->tag, pdu->id, fid, initial_offset, max_count);
+    error_printf("v9fs_readdir initial: %llu max count: %u\n", initial_offset, max_count);
 
     fidp = get_fid(pdu, fid);
     if (fidp == NULL) {
@@ -1904,10 +1981,13 @@ static void v9fs_readdir(void *opaque)
     }
     retval += count + offset;
     trace_v9fs_readdir_return(pdu->tag, pdu->id, count, retval);
+    error_printf("v9fs_readdir: count: %d retval: %d\n\n", count, retval);
 out:
     put_fid(pdu, fidp);
 out_nofid:
     pdu_complete(pdu, retval);
+
+    error_printf("v9fs_readdir: return\n");
 }
 
 static int v9fs_xattr_write(V9fsState *s, V9fsPDU *pdu, V9fsFidState *fidp,
@@ -2166,8 +2246,12 @@ static void v9fs_create(void *opaque)
         }
         v9fs_path_copy(&fidp->path, &path);
     } else if (perm & P9_STAT_MODE_SOCKET) {
+#ifdef WIN32
+        err = -1;
+#else
         err = v9fs_co_mknod(pdu, fidp, &name, fidp->uid, -1,
                             0, S_IFSOCK | (perm & 0777), &stbuf);
+#endif
         if (err < 0) {
             goto out;
         }
@@ -3338,7 +3422,7 @@ int v9fs_device_realize_common(V9fsState *s, Error **errp)
      * call back to do that. Since we are in the init path, we don't
      * use co-routines here.
      */
-    if (s->ops->name_to_path(&s->ctx, NULL, "/", &path) < 0) {
+    if (s->ops->name_to_path(&s->ctx, NULL, DELIMITER_STRING, &path) < 0) {
         error_setg(errp,
                    "error in converting name to path %s", strerror(errno));
         goto out;
@@ -3370,6 +3454,7 @@ void v9fs_device_unrealize_common(V9fsState *s, Error **errp)
 
 static void __attribute__((__constructor__)) v9fs_set_fd_limit(void)
 {
+#ifndef WIN32
     struct rlimit rlim;
     if (getrlimit(RLIMIT_NOFILE, &rlim) < 0) {
         error_report("Failed to get the resource limit");
@@ -3377,4 +3462,5 @@ static void __attribute__((__constructor__)) v9fs_set_fd_limit(void)
     }
     open_fd_hw = rlim.rlim_cur - MIN(400, rlim.rlim_cur/3);
     open_fd_rc = rlim.rlim_cur/2;
+#endif
 }
