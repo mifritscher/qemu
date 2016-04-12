@@ -3,7 +3,29 @@
 
 #include <dirent.h>
 #include <utime.h>
-#include <sys/resource.h>
+#ifdef _WIN32
+/* Bad workaround, from http://octave.org/doxygen/3.4/fcntl_8h.html */
+# define O_NOCTTY 0
+# define O_NDELAY 0
+# define O_NONBLOCK O_NDELAY
+# define O_DSYNC 0
+# define O_DIRECT 0
+# define O_DIRECTORY 0
+# define O_NOFOLLOW 0
+# define O_NOATIME 0
+# define O_SYNC 0
+# define O_ASYNC 0
+
+# define FASYNC 0
+
+# define AT_REMOVEDIR 1
+
+# define NAME_MAX 260
+
+#else
+# include <sys/resource.h>
+#endif
+
 #include <glib.h>
 #include "standard-headers/linux/virtio_9p.h"
 #include "hw/virtio/virtio.h"
@@ -11,6 +33,10 @@
 #include "fsdev/9p-iov-marshal.h"
 #include "qemu/thread.h"
 #include "qemu/coroutine.h"
+
+#define DELIMITER_STRING "/"
+#define DELIMITER_IN_PATH "%s/%s"
+#define DELIMITER_IN_PATH2 "%s/%s/%s"
 
 enum {
     P9_TLERROR = 6,
@@ -108,9 +134,49 @@ enum p9_proto_version {
 
 #define FID_REFERENCED          0x1
 #define FID_NON_RECLAIMABLE     0x2
+
+/* combines the host's root dir and the path to a complete host path */
 static inline char *rpath(FsContext *ctx, const char *path)
 {
-    return g_strdup_printf("%s/%s", ctx->fs_root, path);
+    char *result;
+    result = g_strdup_printf(DELIMITER_IN_PATH, ctx->fs_root, path);
+#ifdef _WIN32
+    int input = 0;
+    int output = 0;
+    while (result[input]) {
+        /* error_printf("<-%d %c\n", input, result[input]); */
+        if (result[input] == '/') {
+            result[output] = '\\';
+            /* remove duplicate \... */
+            if (output > 0 && result[output - 1] == '\\') {
+                /* error_printf("remove duplicate \\\n"); */
+                output--;
+            } else {
+                result[output] = '\\';
+            }
+            /* error_printf("    %c\n", result[output]); */
+        } else {
+            result[output] = result[input];
+        }
+        /* error_printf("->%d %c\n\n", output, result[output]); */
+        input++;
+        output++;
+    }
+    /* Kill last \ (but leave it if the char before is a : ...)
+    So:
+    C:\ -> C:\
+    C:\blah\ -> C:\blah
+    b\ -> b
+    blah\ -> blah */
+    if (output > 1 && result[output - 1] == '\\'
+        && (output == 1 || result[output - 2] != ':')) {
+        /* error_printf("Killed last \\\n"); */
+        result[output - 1] = '\0';
+    } else {
+        result[output] = '\0';
+    }
+#endif
+    return result;
 }
 
 /*

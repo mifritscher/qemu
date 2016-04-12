@@ -12,23 +12,174 @@
  */
 
 #include "qemu/osdep.h"
+/* mifritscher: after killing the debug printf, kill this as well! */
+#include "qemu/error-report.h"
 #include "9p.h"
-#include "9p-xattr.h"
+#ifdef _WIN32
+/* idea from http://mingw-users.1079350.n2.nabble.com/Undefined-reference-to-quot-lstat-quot-and-quot-S-ISLNK-quot-td5450984.html */
+# define lstat(path, buffer) stat(path, buffer)
+
+# define mkdir(path, mode) mkdir(path)
+# define getxattr(buffer, name, pointer, length) 0
+
+/* pretend success */
+static int setxattr(const char *path, const char *name,
+                    const void *value, size_t size, int flags)
+{
+    return 0;
+}
+
+static ssize_t fgetxattr(int fd, const char *name,
+                         void *value, size_t size)
+{
+    return 0;
+}
+
+# define lchown(buffer, uid, gid) 0
+# define readlink(buffer, buf, bufsz) 0
+# define mknod(buffer, mode, u) 0
+# define link(buffer, buffer1) 0
+# define symlink(buffer, buffer1) 0
+
+static ssize_t v9fs_get_xattr(FsContext *ctx, const char *path,
+                              const char *name, void *value, size_t size)
+{
+    errno = 95; /* EOPNOTSUP - wrong definition in mingw(130); */
+    return -1;
+}
+
+static ssize_t v9fs_list_xattr(FsContext *ctx, const char *path,
+                               void *value, size_t vsize)
+{
+    errno = 95; /* EOPNOTSUP - wrong definition in mingw(130); */
+    return -1;
+}
+
+static int v9fs_set_xattr(FsContext *ctx, const char *path,
+                          const char *name, void *value, size_t size,
+                          int flags)
+{
+    errno = 95; /* EOPNOTSUP - wrong definition in mingw(130); */
+    return -1;
+}
+
+static int v9fs_remove_xattr(FsContext *ctx, const char *path,
+                             const char *name)
+{
+    errno = 95; /* EOPNOTSUP - wrong definition in mingw(130); */
+    return -1;
+}
+
+static int readdir_r(DIR *dirp, struct dirent *entry,
+                     struct dirent **result)
+{
+    struct dirent *temp;
+    errno = 0;
+    temp = readdir(dirp);
+    if (temp == 0) {
+        error_printf("readdir_r: End of directory reached -> returning NULL\n");
+        *result = 0;
+    } else {
+        /* Copy it from the stack to the buffer got from the caller */
+        memcpy(entry, temp, sizeof(struct dirent));
+        error_printf("readdir_r: Name: %hu %s\n",
+                     temp->d_namlen, temp->d_name);
+        error_printf("readdir_r: Name: %hu %s\n",
+                     entry->d_namlen, entry->d_name);
+        *result = entry;
+    }
+    return errno;
+}
+
+/* Can be done better... */
+static int statfs(const char *file, struct statfs *buf)
+{
+    memset(buf, 0, sizeof(struct statfs));
+    buf->f_type = 0x01021997; /* V9FS_MAGIC */
+    buf->f_bsize = 4096;
+    buf->f_blocks = 4000000;
+    buf->f_bfree = 3000000;
+    buf->f_bavail = 2999000;
+    buf->f_files = 1000000;
+    buf->f_ffree = 800000;
+    buf->f_namelen = NAME_MAX;
+    return 0;
+}
+
+/* a crude hash function (needed for fake inodes) */
+static ino_t hash(const char *path)
+{
+    ino_t result = (ino_t)41021998;
+    int len = strlen(path);
+    if (!len) {
+        return result;
+    }
+
+    /* Q&D canolizement of the path */
+    if (path[len - 1]  == '\\' || path[len - 1] == '/') {
+        len--;
+    }
+    if (!len) {
+        return result;
+    }
+
+    if (path[len - 1]  == '.') {
+        if (len == 1) {
+            return result;
+        }
+        len--;
+        if (path[len - 1] == '\\' || path[len - 1] == '/') {
+            len--;
+        /* .. -> kill last part */
+        } else if (path[len - 1] == '.') {
+            len--;
+            while (len) {
+                if (path[len - 1] == '\\' || path[len - 1] == '/') {
+                    len--;
+                    break;
+                }
+                len--;
+            }
+        }
+    }
+
+    if (!len) {
+        return result;
+    }
+
+    for (int i = 0; i < len; i++) {
+        result += path[i] << (i % 7);
+        result += path[i] << ((i + 11) % 17);
+        result += path[i] << ((i + 19) % 23);
+    }
+
+    return result;
+}
+
+#else
+# include "9p-xattr.h"
+#endif
 #include "fsdev/qemu-fsdev.h"   /* local_ops */
+#ifndef _WIN32
 #include <arpa/inet.h>
 #include <pwd.h>
 #include <grp.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include "qemu/xattr.h"
+#endif
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
 #include <libgen.h>
-#include <linux/fs.h>
+#ifndef _WIN32
+    #include <linux/fs.h>
+#endif
 #ifdef CONFIG_LINUX_MAGIC_H
 #include <linux/magic.h>
 #endif
+#ifndef _WIN32
 #include <sys/ioctl.h>
+#endif
 
 #ifndef XFS_SUPER_MAGIC
 #define XFS_SUPER_MAGIC  0x58465342
@@ -76,7 +227,7 @@ static FILE *local_fopen(const char *path, const char *mode)
     } else {
         return NULL;
     }
-    fd = open(path, flags, o_mode);
+    fd = open(path, flags | O_BINARY, o_mode);
     if (fd == -1) {
         return NULL;
     }
@@ -124,10 +275,20 @@ static int local_lstat(FsContext *fs_ctx, V9fsPath *fs_path, struct stat *stbuf)
     char *path = fs_path->data;
 
     buffer = rpath(fs_ctx, path);
-    err =  lstat(buffer, stbuf);
+    error_printf("\nrpath %s + %s -> %s\n\n", fs_ctx->fs_root, path, buffer);
+    err = lstat(buffer, stbuf);
     if (err) {
         goto err_out;
     }
+#ifdef _WIN32
+    /* This way, all files are executable
+       (MingW seems to do 777 on dirs, but 666 on files) */
+    stbuf->st_mode |= S_IXUSR | S_IXGRP | S_IXOTH;
+
+    /* Under WIN32 (MingW), st_ino seems to be always 2,
+       which leads to confusion */
+    stbuf->st_ino = hash(path);
+#endif
     if (fs_ctx->export_flags & V9FS_SM_MAPPED) {
         /* Actual credentials are part of extended attrs */
         uid_t tmp_uid;
@@ -162,7 +323,7 @@ static int local_create_mapped_attr_dir(FsContext *ctx, const char *path)
     char *attr_dir;
     char *tmp_path = g_strdup(path);
 
-    attr_dir = g_strdup_printf("%s/%s/%s",
+    attr_dir = g_strdup_printf(DELIMITER_IN_PATH2,
              ctx->fs_root, dirname(tmp_path), VIRTFS_META_DIR);
 
     err = mkdir(attr_dir, 0700);
@@ -223,7 +384,8 @@ update_map_file:
     if (credp->fc_gid != -1) {
         gid = credp->fc_gid;
     }
-    if (credp->fc_mode != -1) {
+    /* mifritscher: is normally unsigned... */
+    if ((int16_t)(credp->fc_mode) != -1) {
         mode = credp->fc_mode;
     }
     if (credp->fc_rdev != -1) {
@@ -268,7 +430,8 @@ static int local_set_xattr(const char *path, FsCred *credp)
             return err;
         }
     }
-    if (credp->fc_mode != -1) {
+    /* mifritscher: is normally unsigned... */
+    if ((int16_t)(credp->fc_mode) != -1) {
         uint32_t tmp_mode = cpu_to_le32(credp->fc_mode);
         err = setxattr(path, "user.virtfs.mode", &tmp_mode, sizeof(mode_t), 0);
         if (err) {
@@ -323,7 +486,7 @@ static ssize_t local_readlink(FsContext *fs_ctx, V9fsPath *fs_path,
         (fs_ctx->export_flags & V9FS_SM_MAPPED_FILE)) {
         int fd;
         buffer = rpath(fs_ctx, path);
-        fd = open(buffer, O_RDONLY | O_NOFOLLOW);
+        fd = open(buffer, O_RDONLY | O_NOFOLLOW | O_BINARY);
         g_free(buffer);
         if (fd == -1) {
             return -1;
@@ -358,7 +521,8 @@ static int local_open(FsContext *ctx, V9fsPath *fs_path,
     char *path = fs_path->data;
 
     buffer = rpath(ctx, path);
-    fs->fd = open(buffer, flags | O_NOFOLLOW);
+    error_printf("File which should be opened: %s\n", buffer);
+    fs->fd = open(buffer, flags | O_NOFOLLOW | O_BINARY);
     g_free(buffer);
     return fs->fd;
 }
@@ -370,6 +534,7 @@ static int local_opendir(FsContext *ctx,
     char *path = fs_path->data;
 
     buffer = rpath(ctx, path);
+    error_printf("Directory (opendir) which should be opened: %s\n", buffer);
     fs->dir = opendir(buffer);
     g_free(buffer);
     if (!fs->dir) {
@@ -395,17 +560,36 @@ static int local_readdir_r(FsContext *ctx, V9fsFidOpenState *fs,
     int ret;
 
 again:
+#ifdef _WIN32
+    error_printf("local_readdir_r: Directory which should be read:%s\n",
+                 fs->dir->dd_name);
+#endif
     ret = readdir_r(fs->dir, entry, result);
     if (ctx->export_flags & V9FS_SM_MAPPED) {
+#ifndef _WIN32
         entry->d_type = DT_UNKNOWN;
+#endif
     } else if (ctx->export_flags & V9FS_SM_MAPPED_FILE) {
         if (!ret && *result != NULL &&
             !strcmp(entry->d_name, VIRTFS_META_DIR)) {
             /* skp the meta data directory */
             goto again;
         }
+#ifndef _WIN32
         entry->d_type = DT_UNKNOWN;
+#endif
     }
+    if (*result == NULL) {
+        error_printf("local_readdir_r: End of directory -> returning NULL\n");
+    } else {
+#ifdef _WIN32
+        error_printf("local_readdir_r: Name: %hu %s\n",
+                     entry->d_namlen, entry->d_name);
+#else
+        error_printf("local_readdir_r: Name: %s\n", entry->d_name);
+#endif
+    }
+    error_printf("local_readdir_r: return %d\n", ret);
     return ret;
 }
 
@@ -418,10 +602,15 @@ static ssize_t local_preadv(FsContext *ctx, V9fsFidOpenState *fs,
                             const struct iovec *iov,
                             int iovcnt, off_t offset)
 {
+   error_printf("local_preadv: #iov: %u, addr: %p, #bytes: %u, offset: %llu\n",
+                iovcnt, iov->iov_base, iov->iov_len, offset);
 #ifdef CONFIG_PREADV
+    error_printf("local_preadv: using preadv\n");
     return preadv(fs->fd, iov, iovcnt, offset);
 #else
+    error_printf("local_preadv: not using preadv\n");
     int err = lseek(fs->fd, offset, SEEK_SET);
+    error_printf("local_preadv: lseek returned %d\n", err);
     if (err == -1) {
         return err;
     } else {
@@ -491,7 +680,7 @@ static int local_mknod(FsContext *fs_ctx, V9fsPath *dir_path,
     char *buffer = NULL;
 
     v9fs_string_init(&fullname);
-    v9fs_string_sprintf(&fullname, "%s/%s", dir_path->data, name);
+    v9fs_string_sprintf(&fullname, DELIMITER_IN_PATH, dir_path->data, name);
     path = fullname.data;
 
     /* Determine the security model */
@@ -552,7 +741,7 @@ static int local_mkdir(FsContext *fs_ctx, V9fsPath *dir_path,
     char *buffer = NULL;
 
     v9fs_string_init(&fullname);
-    v9fs_string_sprintf(&fullname, "%s/%s", dir_path->data, name);
+    v9fs_string_sprintf(&fullname, DELIMITER_IN_PATH, dir_path->data, name);
     path = fullname.data;
 
     /* Determine the security model */
@@ -610,7 +799,14 @@ static int local_fstat(FsContext *fs_ctx, int fid_type,
     int err, fd;
 
     if (fid_type == P9_FID_DIR) {
+        /* Don't know if that's right...
+           (on WIN32/mingw, DIR has no fd entry) */
+#ifdef _WIN32
+        #warning "Could cause problems!"
+        fd = fs->fd;
+#else
         fd = dirfd(fs->dir);
+#endif
     } else {
         fd = fs->fd;
     }
@@ -619,6 +815,13 @@ static int local_fstat(FsContext *fs_ctx, int fid_type,
     if (err) {
         return err;
     }
+#ifdef _WIN32
+    /* This way, all files are executable
+       (MingW seems to do 777 on dirs, but 666 on files) */
+    stbuf->st_mode |= S_IXUSR | S_IXGRP | S_IXOTH;
+
+    /* mifritscher: TODO: fake inode? */
+#endif
     if (fs_ctx->export_flags & V9FS_SM_MAPPED) {
         /* Actual credentials are part of extended attrs */
         uid_t tmp_uid;
@@ -661,13 +864,16 @@ static int local_open2(FsContext *fs_ctx, V9fsPath *dir_path, const char *name,
     flags |= O_NOFOLLOW;
 
     v9fs_string_init(&fullname);
-    v9fs_string_sprintf(&fullname, "%s/%s", dir_path->data, name);
+    v9fs_string_sprintf(&fullname, DELIMITER_IN_PATH, dir_path->data, name);
     path = fullname.data;
+
+    error_printf("local_open2: got %s %s\n", dir_path->data, name);
+    error_printf("local_open2: full path: %s\n", path);
 
     /* Determine the security model */
     if (fs_ctx->export_flags & V9FS_SM_MAPPED) {
         buffer = rpath(fs_ctx, path);
-        fd = open(buffer, flags, SM_LOCAL_MODE_BITS);
+        fd = open(buffer, flags | O_BINARY, SM_LOCAL_MODE_BITS);
         if (fd == -1) {
             err = fd;
             goto out;
@@ -681,7 +887,7 @@ static int local_open2(FsContext *fs_ctx, V9fsPath *dir_path, const char *name,
         }
     } else if (fs_ctx->export_flags & V9FS_SM_MAPPED_FILE) {
         buffer = rpath(fs_ctx, path);
-        fd = open(buffer, flags, SM_LOCAL_MODE_BITS);
+        fd = open(buffer, flags | O_BINARY, SM_LOCAL_MODE_BITS);
         if (fd == -1) {
             err = fd;
             goto out;
@@ -696,12 +902,17 @@ static int local_open2(FsContext *fs_ctx, V9fsPath *dir_path, const char *name,
     } else if ((fs_ctx->export_flags & V9FS_SM_PASSTHROUGH) ||
                (fs_ctx->export_flags & V9FS_SM_NONE)) {
         buffer = rpath(fs_ctx, path);
-        fd = open(buffer, flags, credp->fc_mode);
+        error_printf("local_open2: File which should be opened (open2): %s\n",
+                     buffer);
+        fd = open(buffer, flags | O_BINARY, credp->fc_mode);
+        error_printf("local_open2: open returned %d\n", fd);
         if (fd == -1) {
             err = fd;
             goto out;
         }
         err = local_post_create_passthrough(fs_ctx, path, credp);
+        error_printf("local_open2: local_post_create_passthrough returned %u\n",
+                     err);
         if (err == -1) {
             serrno = errno;
             goto err_end;
@@ -732,7 +943,7 @@ static int local_symlink(FsContext *fs_ctx, const char *oldpath,
     char *buffer = NULL;
 
     v9fs_string_init(&fullname);
-    v9fs_string_sprintf(&fullname, "%s/%s", dir_path->data, name);
+    v9fs_string_sprintf(&fullname, DELIMITER_IN_PATH, dir_path->data, name);
     newpath = fullname.data;
 
     /* Determine the security model */
@@ -740,7 +951,9 @@ static int local_symlink(FsContext *fs_ctx, const char *oldpath,
         int fd;
         ssize_t oldpath_size, write_size;
         buffer = rpath(fs_ctx, newpath);
-        fd = open(buffer, O_CREAT|O_EXCL|O_RDWR|O_NOFOLLOW, SM_LOCAL_MODE_BITS);
+        fd = open(buffer,
+                  O_CREAT | O_EXCL | O_RDWR | O_NOFOLLOW | O_BINARY,
+                  SM_LOCAL_MODE_BITS);
         if (fd == -1) {
             err = fd;
             goto out;
@@ -758,8 +971,10 @@ static int local_symlink(FsContext *fs_ctx, const char *oldpath,
             goto err_end;
         }
         close(fd);
-        /* Set cleint credentials in symlink's xattr */
+        /* Set client credentials in symlink's xattr */
+#ifndef _WIN32
         credp->fc_mode = credp->fc_mode|S_IFLNK;
+#endif
         err = local_set_xattr(buffer, credp);
         if (err == -1) {
             serrno = errno;
@@ -769,7 +984,9 @@ static int local_symlink(FsContext *fs_ctx, const char *oldpath,
         int fd;
         ssize_t oldpath_size, write_size;
         buffer = rpath(fs_ctx, newpath);
-        fd = open(buffer, O_CREAT|O_EXCL|O_RDWR|O_NOFOLLOW, SM_LOCAL_MODE_BITS);
+        fd = open(buffer,
+                  O_CREAT | O_EXCL | O_RDWR | O_NOFOLLOW | O_BINARY,
+                  SM_LOCAL_MODE_BITS);
         if (fd == -1) {
             err = fd;
             goto out;
@@ -788,7 +1005,9 @@ static int local_symlink(FsContext *fs_ctx, const char *oldpath,
         }
         close(fd);
         /* Set cleint credentials in symlink's xattr */
+#ifndef _WIN32
         credp->fc_mode = credp->fc_mode|S_IFLNK;
+#endif
         err = local_set_mapped_file_attr(fs_ctx, newpath, credp);
         if (err == -1) {
             serrno = errno;
@@ -833,7 +1052,7 @@ static int local_link(FsContext *ctx, V9fsPath *oldpath,
     char *buffer, *buffer1;
 
     v9fs_string_init(&newpath);
-    v9fs_string_sprintf(&newpath, "%s/%s", dirpath->data, name);
+    v9fs_string_sprintf(&newpath, DELIMITER_IN_PATH, dirpath->data, name);
 
     buffer = rpath(ctx, oldpath->data);
     buffer1 = rpath(ctx, newpath.data);
@@ -934,7 +1153,12 @@ static int local_utimensat(FsContext *s, V9fsPath *fs_path,
     char *path = fs_path->data;
 
     buffer = rpath(s, path);
+#ifdef _WIN32
+    #warning "Could cause problems!"
+    ret = 0;
+#else
     ret = qemu_utimens(buffer, buf);
+#endif
     g_free(buffer);
     return ret;
 }
@@ -949,6 +1173,7 @@ static int local_remove(FsContext *ctx, const char *path)
         buffer = rpath(ctx, path);
         err =  lstat(buffer, &stbuf);
         g_free(buffer);
+        error_printf("local_remove: stat %d %d\n", err, errno);
         if (err) {
             goto err_out;
         }
@@ -957,10 +1182,12 @@ static int local_remove(FsContext *ctx, const char *path)
          * directory
          */
         if (S_ISDIR(stbuf.st_mode)) {
-            buffer = g_strdup_printf("%s/%s/%s", ctx->fs_root,
+            buffer = g_strdup_printf(DELIMITER_IN_PATH2, ctx->fs_root,
                                      path, VIRTFS_META_DIR);
             err = remove(buffer);
             g_free(buffer);
+            error_printf("local_remove: .virtfs_metdata remove %d %d\n",
+                         err, errno);
             if (err < 0 && errno != ENOENT) {
                 /*
                  * We didn't had the .virtfs_metadata file. May be file created
@@ -976,6 +1203,8 @@ static int local_remove(FsContext *ctx, const char *path)
         buffer = local_mapped_attr_path(ctx, path);
         err = remove(buffer);
         g_free(buffer);
+        error_printf("local_remove: local_mapped_attr_path remove %d %d\n",
+                     err, errno);
         if (err < 0 && errno != ENOENT) {
             /*
              * We didn't had the .virtfs_metadata file. May be file created
@@ -986,7 +1215,14 @@ static int local_remove(FsContext *ctx, const char *path)
     }
 
     buffer = rpath(ctx, path);
-    err = remove(buffer);
+    /* mifritscher: posix remove can delete directories as well, windows not */
+    if (S_ISDIR(stbuf.st_mode)) {
+        err = rmdir(buffer);
+    } else {
+        err = remove(buffer);
+    }
+    error_printf("local_remove: final remove %d %d\n",
+                 err, errno);
     g_free(buffer);
 err_out:
     return err;
@@ -998,7 +1234,12 @@ static int local_fsync(FsContext *ctx, int fid_type,
     int fd;
 
     if (fid_type == P9_FID_DIR) {
+#ifdef _WIN32
+        #warning "Could cause problems!"
+        fd = fs->fd;
+#else
         fd = dirfd(fs->dir);
+#endif
     } else {
         fd = fs->fd;
     }
@@ -1058,10 +1299,14 @@ static int local_name_to_path(FsContext *ctx, V9fsPath *dir_path,
                               const char *name, V9fsPath *target)
 {
     if (dir_path) {
-        v9fs_string_sprintf((V9fsString *)target, "%s/%s",
+        v9fs_string_sprintf((V9fsString *)target, DELIMITER_IN_PATH,
                             dir_path->data, name);
+        error_printf("local_name_to_path: ");
+        error_printf(DELIMITER_IN_PATH, dir_path->data, name);
+        error_printf("\n");
     } else {
         v9fs_string_sprintf((V9fsString *)target, "%s", name);
+        error_printf("local_name_to_path: %s\n", name);
     }
     /* Bump the size for including terminating NULL */
     target->size++;
@@ -1078,8 +1323,10 @@ static int local_renameat(FsContext *ctx, V9fsPath *olddir,
     v9fs_string_init(&old_full_name);
     v9fs_string_init(&new_full_name);
 
-    v9fs_string_sprintf(&old_full_name, "%s/%s", olddir->data, old_name);
-    v9fs_string_sprintf(&new_full_name, "%s/%s", newdir->data, new_name);
+    v9fs_string_sprintf(&old_full_name,
+                        DELIMITER_IN_PATH, olddir->data, old_name);
+    v9fs_string_sprintf(&new_full_name,
+                        DELIMITER_IN_PATH, newdir->data, new_name);
 
     ret = local_rename(ctx, old_full_name.data, new_full_name.data);
     v9fs_string_free(&old_full_name);
@@ -1096,17 +1343,19 @@ static int local_unlinkat(FsContext *ctx, V9fsPath *dir,
 
     v9fs_string_init(&fullname);
 
-    v9fs_string_sprintf(&fullname, "%s/%s", dir->data, name);
+    v9fs_string_sprintf(&fullname, DELIMITER_IN_PATH, dir->data, name);
     if (ctx->export_flags & V9FS_SM_MAPPED_FILE) {
         if (flags == AT_REMOVEDIR) {
             /*
              * If directory remove .virtfs_metadata contained in the
              * directory
              */
-            buffer = g_strdup_printf("%s/%s/%s", ctx->fs_root,
+            buffer = g_strdup_printf(DELIMITER_IN_PATH2, ctx->fs_root,
                                      fullname.data, VIRTFS_META_DIR);
             ret = remove(buffer);
             g_free(buffer);
+            error_printf("local_unlinkat: .virtfs_metadata %d %d\n",
+                         ret, errno);
             if (ret < 0 && errno != ENOENT) {
                 /*
                  * We didn't had the .virtfs_metadata file. May be file created
@@ -1121,6 +1370,8 @@ static int local_unlinkat(FsContext *ctx, V9fsPath *dir,
          */
         buffer = local_mapped_attr_path(ctx, fullname.data);
         ret = remove(buffer);
+        error_printf("local_unlinkat: local_mapped_attr_path %d %d\n",
+                     ret, errno);
         g_free(buffer);
         if (ret < 0 && errno != ENOENT) {
             /*
@@ -1133,6 +1384,19 @@ static int local_unlinkat(FsContext *ctx, V9fsPath *dir,
     /* Remove the name finally */
     buffer = rpath(ctx, fullname.data);
     ret = remove(buffer);
+    error_printf("local_unlinkat: final |%s| %d %d\n", buffer, ret, errno);
+    /* extension for MingW: remove or Windows can't handle directories... */
+#ifdef _WIN32
+    /* mifritscher: Try to delete it as directory
+       (AT_REMOVEDIR doesn't seem to be set in this case
+       (testcase: rmdir from Linux)) */
+    if (ret < 0) {
+        ret = rmdir(buffer);
+            error_printf("local_unlinkat: final rmdir |%s| %d %d\n",
+                         buffer, ret, errno);
+
+    }
+#endif
     g_free(buffer);
 
 err_out:
@@ -1140,6 +1404,7 @@ err_out:
     return ret;
 }
 
+#ifndef _WIN32
 static int local_ioc_getversion(FsContext *ctx, V9fsPath *path,
                                 mode_t st_mode, uint64_t *st_gen)
 {
@@ -1167,12 +1432,18 @@ static int local_ioc_getversion(FsContext *ctx, V9fsPath *path,
     return -1;
 #endif
 }
+#endif
 
 static int local_init(FsContext *ctx)
 {
     int err = 0;
+#ifdef FS_IOC_GETVERSION
     struct statfs stbuf;
+#endif
 
+#ifdef _WIN32
+    ctx->xops = 0;
+#else
     if (ctx->export_flags & V9FS_SM_PASSTHROUGH) {
         ctx->xops = passthrough_xattr_ops;
     } else if (ctx->export_flags & V9FS_SM_MAPPED) {
@@ -1186,6 +1457,7 @@ static int local_init(FsContext *ctx)
          */
         ctx->xops = passthrough_xattr_ops;
     }
+#endif
     ctx->export_flags |= V9FS_PATHNAME_FSCONTEXT;
 #ifdef FS_IOC_GETVERSION
     /*

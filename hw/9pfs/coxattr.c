@@ -17,6 +17,8 @@
 #include "qemu/thread.h"
 #include "qemu/coroutine.h"
 #include "coth.h"
+/* mifritscher: after killing the debug printf, kill this as well! */
+#include "qemu/error-report.h"
 
 int v9fs_co_llistxattr(V9fsPDU *pdu, V9fsPath *path, void *value, size_t size)
 {
@@ -35,6 +37,7 @@ int v9fs_co_llistxattr(V9fsPDU *pdu, V9fsPath *path, void *value, size_t size)
             }
         });
     v9fs_path_unlock(s);
+    error_printf("v9fs_co_llistxattr: %d\n", err);
     return err;
 }
 
@@ -59,6 +62,7 @@ int v9fs_co_lgetxattr(V9fsPDU *pdu, V9fsPath *path,
             }
         });
     v9fs_path_unlock(s);
+    error_printf("v9fs_co_lgetxattr: %d\n", err);
     return err;
 }
 
@@ -83,6 +87,7 @@ int v9fs_co_lsetxattr(V9fsPDU *pdu, V9fsPath *path,
             }
         });
     v9fs_path_unlock(s);
+    error_printf("v9fs_co_lsetxattr: %d\n", err);
     return err;
 }
 
@@ -104,5 +109,6 @@ int v9fs_co_lremovexattr(V9fsPDU *pdu, V9fsPath *path,
             }
         });
     v9fs_path_unlock(s);
+    error_printf("v9fs_co_lremovexattr: %d\n", err);
     return err;
 }
