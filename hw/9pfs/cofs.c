@@ -17,8 +17,6 @@
 #include "qemu/thread.h"
 #include "qemu/coroutine.h"
 #include "coth.h"
-/* mifritscher: after killing the debug printf, kill this as well! */
-#include "qemu/error-report.h"
 
 static ssize_t __readlink(V9fsState *s, V9fsPath *path, V9fsString *buf)
 {
@@ -69,7 +67,6 @@ int v9fs_co_readlink(V9fsPDU *pdu, V9fsPath *path, V9fsString *buf)
             }
         });
     v9fs_path_unlock(s);
-    error_printf("v9fs_co_readlink: %d\n", err);
     return err;
 }
 
@@ -90,7 +87,6 @@ int v9fs_co_statfs(V9fsPDU *pdu, V9fsPath *path, struct statfs *stbuf)
             }
         });
     v9fs_path_unlock(s);
-    error_printf("v9fs_co_statfs: %d\n", err);
     return err;
 }
 
@@ -114,7 +110,6 @@ int v9fs_co_chmod(V9fsPDU *pdu, V9fsPath *path, mode_t mode)
             }
         });
     v9fs_path_unlock(s);
-    error_printf("v9fs_co_chmod: %d\n", err);
     return err;
 }
 
@@ -136,7 +131,6 @@ int v9fs_co_utimensat(V9fsPDU *pdu, V9fsPath *path,
             }
         });
     v9fs_path_unlock(s);
-    error_printf("v9fs_co_utimensat: %d\n", err);
     return err;
 }
 
@@ -161,7 +155,6 @@ int v9fs_co_chown(V9fsPDU *pdu, V9fsPath *path, uid_t uid, gid_t gid)
             }
         });
     v9fs_path_unlock(s);
-    error_printf("v9fs_co_chown: %d\n", err);
     return err;
 }
 
@@ -182,7 +175,6 @@ int v9fs_co_truncate(V9fsPDU *pdu, V9fsPath *path, off_t size)
             }
         });
     v9fs_path_unlock(s);
-    error_printf("v9fs_co_truncate: %d\n", err);
     return err;
 }
 
@@ -221,7 +213,6 @@ int v9fs_co_mknod(V9fsPDU *pdu, V9fsFidState *fidp, V9fsString *name, uid_t uid,
             }
         });
     v9fs_path_unlock(s);
-    error_printf("v9fs_co_mknod: %d\n", err);
     return err;
 }
 
@@ -243,7 +234,6 @@ int v9fs_co_remove(V9fsPDU *pdu, V9fsPath *path)
             }
         });
     v9fs_path_unlock(s);
-    error_printf("v9fs_co_remove: %d\n", err);
     return err;
 }
 
@@ -264,7 +254,6 @@ int v9fs_co_unlinkat(V9fsPDU *pdu, V9fsPath *path, V9fsString *name, int flags)
             }
         });
     v9fs_path_unlock(s);
-    error_printf("v9fs_co_unlinkat: %d\n", err);
     return err;
 }
 
@@ -284,7 +273,6 @@ int v9fs_co_rename(V9fsPDU *pdu, V9fsPath *oldpath, V9fsPath *newpath)
                 err = -errno;
             }
         });
-    error_printf("v9fs_co_rename: %d\n", err);
     return err;
 }
 
@@ -305,7 +293,6 @@ int v9fs_co_renameat(V9fsPDU *pdu, V9fsPath *olddirpath, V9fsString *oldname,
                 err = -errno;
             }
         });
-    error_printf("v9fs_co_renameat: %d\n", err);
     return err;
 }
 
@@ -344,7 +331,6 @@ int v9fs_co_symlink(V9fsPDU *pdu, V9fsFidState *dfidp, V9fsString *name,
             }
         });
     v9fs_path_unlock(s);
-    error_printf("v9fs_co_symlink: %d\n", err);
     return err;
 }
 
@@ -375,6 +361,5 @@ int v9fs_co_name_to_path(V9fsPDU *pdu, V9fsPath *dirpath,
                 }
             });
     }
-    error_printf("v9fs_co_name_to_path: %d\n", err);
     return err;
 }

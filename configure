@@ -4604,21 +4604,12 @@ if [ "$linux" = "yes" -o "$bsd" = "yes" -o "$solaris" = "yes" ] ; then
 fi
 if test "$softmmu" = yes ; then
   if test "$virtfs" != no ; then
-    if test "$linux" = yes ; then
-      if test "$cap" = yes  && test "$attr" = yes ; then
-        virtfs=yes
-        tools="$tools fsdev/virtfs-proxy-helper\$(EXESUF)"
-      else
-        if test "$virtfs" = yes; then
-          error_exit "VirtFS requires libcap-devel and libattr-devel on Linux"
-        fi
-        virtfs=no
-      fi
-    elif test "$mingw32" = yes; then
+    if test "$cap" = yes && test "$linux" = yes && test "$attr" = yes ; then
       virtfs=yes
+      tools="$tools fsdev/virtfs-proxy-helper\$(EXESUF)"
     else
       if test "$virtfs" = yes; then
-        error_exit "VirtFS is only supported on Linux or Windows"
+        error_exit "VirtFS is supported only on Linux and requires libcap-devel and libattr-devel"
       fi
       virtfs=no
     fi

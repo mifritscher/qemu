@@ -17,8 +17,6 @@
 #include "qemu/thread.h"
 #include "qemu/coroutine.h"
 #include "coth.h"
-/* mifritscher: after killing the debug printf, kill this as well! */
-#include "qemu/error-report.h"
 
 int v9fs_co_readdir_r(V9fsPDU *pdu, V9fsFidState *fidp, struct dirent *dent,
                       struct dirent **result)
@@ -39,11 +37,6 @@ int v9fs_co_readdir_r(V9fsPDU *pdu, V9fsFidState *fidp, struct dirent *dent,
                 err = 0;
             }
         });
-#ifdef WIN32
-    error_printf("v9fs_co_readdir_r: %s %d %p\n", (&fidp->fs)->dir->dd_name, err, *result);
-#else
-    error_printf("v9fs_co_readdir_r: %d %p\n", err, *result);
-#endif
     return err;
 }
 
@@ -62,11 +55,6 @@ off_t v9fs_co_telldir(V9fsPDU *pdu, V9fsFidState *fidp)
                 err = -errno;
             }
         });
-#ifdef WIN32
-    error_printf("v9fs_co_telldir_r: %s %lld\n", (&fidp->fs)->dir->dd_name, err);
-#else
-    error_printf("v9fs_co_telldir_r: %ld\n", err);
-#endif
     return err;
 }
 
@@ -80,11 +68,6 @@ void v9fs_co_seekdir(V9fsPDU *pdu, V9fsFidState *fidp, off_t offset)
         {
             s->ops->seekdir(&s->ctx, &fidp->fs, offset);
         });
-#ifdef WIN32
-    error_printf("v9fs_co_seekdir: %s\n", (&fidp->fs)->dir->dd_name);
-#else
-    error_printf("v9fs_co_seekdir\n");
-#endif
 }
 
 void v9fs_co_rewinddir(V9fsPDU *pdu, V9fsFidState *fidp)
@@ -97,11 +80,6 @@ void v9fs_co_rewinddir(V9fsPDU *pdu, V9fsFidState *fidp)
         {
             s->ops->rewinddir(&s->ctx, &fidp->fs);
         });
-#ifdef WIN32
-    error_printf("v9fs_co_rewinddir: %s\n", (&fidp->fs)->dir->dd_name);
-#else
-    error_printf("v9fs_co_rewinddir\n");
-#endif
 }
 
 int v9fs_co_mkdir(V9fsPDU *pdu, V9fsFidState *fidp, V9fsString *name,
@@ -138,11 +116,6 @@ int v9fs_co_mkdir(V9fsPDU *pdu, V9fsFidState *fidp, V9fsString *name,
             }
         });
     v9fs_path_unlock(s);
-#ifdef WIN32
-    error_printf("v9fs_co_mkdir: %s %d\n", (&fidp->fs)->dir->dd_name, err);
-#else
-    error_printf("v9fs_co_mkdir: %d\n", err);
-#endif
     return err;
 }
 
@@ -171,11 +144,6 @@ int v9fs_co_opendir(V9fsPDU *pdu, V9fsFidState *fidp)
             v9fs_reclaim_fd(pdu);
         }
     }
-#ifdef WIN32
-    error_printf("v9fs_co_opendir: %s %d\n", (&fidp->fs)->dir->dd_name, err);
-#else
-    error_printf("v9fs_co_opendir: %d\n", err);
-#endif
     return err;
 }
 
@@ -197,6 +165,5 @@ int v9fs_co_closedir(V9fsPDU *pdu, V9fsFidOpenState *fs)
     if (!err) {
         total_open_fd--;
     }
-    error_printf("v9fs_co_closedir: %d\n", err);
     return err;
 }

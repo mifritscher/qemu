@@ -16,9 +16,7 @@
 #include <glib/gprintf.h>
 #include <dirent.h>
 #include <utime.h>
-#ifndef WIN32
-    #include <sys/uio.h>
-#endif
+#include <sys/uio.h>
 
 #include "9p-marshal.h"
 

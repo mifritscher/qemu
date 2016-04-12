@@ -15,9 +15,7 @@
 #include <glib.h>
 #include <glib/gprintf.h>
 #include <utime.h>
-#ifndef WIN32
-    #include <sys/uio.h>
-#endif
+#include <sys/uio.h>
 
 #include "9p-iov-marshal.h"
 #include "qemu/bswap.h"

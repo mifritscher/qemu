@@ -26,9 +26,7 @@ static FsDriverTable FsDrivers[] = {
     { .name = "handle", .ops = &handle_ops},
 #endif
     { .name = "synth", .ops = &synth_ops},
-#ifndef WIN32
     { .name = "proxy", .ops = &proxy_ops},
-#endif
 };
 
 int qemu_fsdev_add(QemuOpts *opts)

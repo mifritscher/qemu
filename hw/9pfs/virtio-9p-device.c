@@ -17,9 +17,7 @@
 #include "qemu/sockets.h"
 #include "virtio-9p.h"
 #include "fsdev/qemu-fsdev.h"
-#ifndef WIN32
-    #include "9p-xattr.h"
-#endif
+#include "9p-xattr.h"
 #include "coth.h"
 #include "hw/virtio/virtio-access.h"
 #include "qemu/iov.h"
